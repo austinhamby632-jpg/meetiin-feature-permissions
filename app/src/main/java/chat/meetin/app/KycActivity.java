@@ -31,6 +31,7 @@ public class KycActivity extends AppCompatActivity {
     private static final int REQUEST_IMAGE_PICK = 2001;
     private static final int REQUEST_IMAGE_CAPTURE = 2002;
     private static final int REQUEST_CAMERA_PERMISSION = 2003;
+    private static final int REQUEST_KYC_PERMISSIONS = 2004;
 
     private ImageView previewImage;
     private Button cameraBtn, galleryBtn, submitBtn;
@@ -52,6 +53,28 @@ public class KycActivity extends AppCompatActivity {
         submitBtn.setOnClickListener(v -> submitDocument());
 
         submitBtn.setEnabled(false);
+        requestKycPermissions();
+    }
+
+    private void requestKycPermissions() {
+        java.util.ArrayList<String> missing = new java.util.ArrayList<>();
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.CAMERA);
+        }
+
+        String storagePermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                ? Manifest.permission.READ_MEDIA_IMAGES
+                : Manifest.permission.READ_EXTERNAL_STORAGE;
+        if (ContextCompat.checkSelfPermission(this, storagePermission)
+                != PackageManager.PERMISSION_GRANTED) {
+            missing.add(storagePermission);
+        }
+
+        if (!missing.isEmpty()) {
+            ActivityCompat.requestPermissions(this,
+                    missing.toArray(new String[0]), REQUEST_KYC_PERMISSIONS);
+        }
     }
 
     private void openGallery() {
@@ -158,6 +181,19 @@ public class KycActivity extends AppCompatActivity {
         if (requestCode == REQUEST_CAMERA_PERMISSION) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 openCamera();
+            }
+        } else if (requestCode == REQUEST_KYC_PERMISSIONS) {
+            boolean cameraGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                    == PackageManager.PERMISSION_GRANTED;
+            String storagePermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                    ? Manifest.permission.READ_MEDIA_IMAGES
+                    : Manifest.permission.READ_EXTERNAL_STORAGE;
+            boolean storageGranted = ContextCompat.checkSelfPermission(this, storagePermission)
+                    == PackageManager.PERMISSION_GRANTED;
+            if (!cameraGranted || !storageGranted) {
+                Toast.makeText(this,
+                        "Camera and storage access are needed to upload an identity document.",
+                        Toast.LENGTH_LONG).show();
             }
         }
     }

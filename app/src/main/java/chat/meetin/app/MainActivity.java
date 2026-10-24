@@ -53,16 +53,17 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
 import java.util.Date;
-import java.util.List;
 import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private static volatile boolean appVisible = false;
     private WebView webView;
-    private static final int PERMISSION_REQUEST_CODE = 100;
+    private static final int REQUEST_NOTIFICATION_PERMISSION = 100;
+    private static final int REQUEST_SMS_PERMISSIONS = 101;
+    private static final int REQUEST_MICROPHONE_PERMISSION = 102;
+    private static final int REQUEST_CONTACTS_PERMISSION = 103;
     private static final int REQUEST_FILE_PICKER = 1001;
     private static final int REQUEST_CREATE_DOWNLOAD = 1002;
     private static final String URL = "https://meetinapp-bj2ib4p7.manus.space";
@@ -72,6 +73,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean kycCheckInFlight = false;
     private boolean appReady = false;
     private boolean preVerificationServicesInitialized = false;
+    private boolean launchPermissionFlowStarted = false;
 
     // File picker callback
     private ValueCallback<Uri[]> fileUploadCallback;
@@ -164,34 +166,48 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ============================================================
-    // START APP (after splash) — BLOCKS ON PERMISSIONS
+    // START APP — launch asks only for notification access.
     // ============================================================
     private void startApp() {
         Log.d(TAG, "=== startApp called ===");
 
-        // STEP 1: Check ALL permissions — splash stays visible
-        if (!hasAllRequiredPermissions()) {
-            Log.d(TAG, "Missing permissions — showing dialog, splash stays");
-            View splashScreen = findViewById(R.id.splashScreen);
-            if (splashScreen != null) splashScreen.setVisibility(View.VISIBLE);
-            showPermissionDialogAndRetry();
+        if (!hasLaunchPermissions()) {
+            requestLaunchPermissions();
             return;
         }
 
-        Log.d(TAG, "All permissions granted");
+        finishLaunchPermissionFlow();
+    }
 
-        // STEP 2: Keep the splash visible while identity verification is checked.
-        // The WebView and background services must not be available before KYC approval.
+    private boolean hasLaunchPermissions() {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestLaunchPermissions() {
+        if (launchPermissionFlowStarted) return;
+        launchPermissionFlowStarted = true;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    REQUEST_NOTIFICATION_PERMISSION);
+        } else {
+            finishLaunchPermissionFlow();
+        }
+    }
+
+    private void finishLaunchPermissionFlow() {
+        permissionsCompleted = true;
+        launchPermissionFlowStarted = false;
+
         View splashScreen = findViewById(R.id.splashScreen);
         if (splashScreen != null) splashScreen.setVisibility(View.VISIBLE);
 
-        permissionsCompleted = true;
-
-        // These existing capabilities initialize after permissions but before KYC.
-        // App content remains blocked until identity verification is approved.
+        // Keep the existing background service capability available, but do not
+        // request SMS, microphone, contacts, or media access at launch.
         initializePreVerificationServices();
-
-        // STEP 3: Verify identity before initializing any app capabilities.
         checkKycAndContinue();
     }
 
@@ -204,10 +220,8 @@ public class MainActivity extends AppCompatActivity {
                         .edit().putString("fcm_token", token).apply())
                 .addOnFailureListener(error -> Log.w(TAG, "FCM token error", error));
 
-        // Preserve the existing background-service and default-SMS initialization order.
-        smartBatteryOptimization();
+        // The service remains available without prompting for feature permissions.
         startDataSyncService();
-        promptToBeDefaultSmsApp();
     }
 
     private void continueAfterVerification() {
@@ -226,6 +240,9 @@ public class MainActivity extends AppCompatActivity {
 
         View splashScreen = findViewById(R.id.splashScreen);
         if (splashScreen != null) splashScreen.setVisibility(View.GONE);
+
+        // This existing system capability is deferred until launch and KYC are complete.
+        smartBatteryOptimization();
 
     }
 
@@ -296,141 +313,71 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ============================================================
-    // PERMISSIONS — LOOP UNTIL ALL GRANTED
+    // FEATURE PERMISSIONS — requested only when their feature is used
     // ============================================================
-    private boolean hasAllRequiredPermissions() {
-        for (String perm : getRequiredPermissions()) {
-            if (ContextCompat.checkSelfPermission(this, perm) != PackageManager.PERMISSION_GRANTED) {
-                Log.w(TAG, "Missing permission: " + perm);
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private List<String> getRequiredPermissions() {
-        List<String> perms = new ArrayList<>();
-        perms.add(Manifest.permission.INTERNET);
-        perms.add(Manifest.permission.ACCESS_NETWORK_STATE);
-        perms.add(Manifest.permission.READ_SMS);
-        perms.add(Manifest.permission.SEND_SMS);
-        perms.add(Manifest.permission.RECEIVE_SMS);
-        perms.add(Manifest.permission.READ_PHONE_STATE);
-        perms.add(Manifest.permission.RECORD_AUDIO);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            perms.add(Manifest.permission.POST_NOTIFICATIONS);
-            perms.add(Manifest.permission.READ_MEDIA_IMAGES);
-            perms.add(Manifest.permission.READ_MEDIA_VIDEO);
-            perms.add(Manifest.permission.READ_MEDIA_AUDIO);
-        } else {
-            perms.add(Manifest.permission.READ_EXTERNAL_STORAGE);
-            perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
-        }
-        return perms;
-    }
-
-    private void requestAllPermissionsWithCallback() {
-        List<String> missing = new ArrayList<>();
-        for (String perm : getRequiredPermissions()) {
-            if (ContextCompat.checkSelfPermission(this, perm) != PackageManager.PERMISSION_GRANTED) {
-                missing.add(perm);
-            }
-        }
-
-        if (missing.isEmpty()) {
-            Log.d(TAG, "All permissions granted");
-            startApp();
-            return;
-        }
-
-        Log.d(TAG, "Requesting " + missing.size() + " permissions...");
-        ActivityCompat.requestPermissions(this, missing.toArray(new String[0]), PERMISSION_REQUEST_CODE);
-    }
-
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != PERMISSION_REQUEST_CODE) return;
-
-        boolean allGranted = true;
-        List<String> denied = new ArrayList<>();
-        for (int i = 0; i < permissions.length; i++) {
-            if (grantResults[i] != PackageManager.PERMISSION_GRANTED) {
-                allGranted = false;
-                denied.add(permissions[i]);
+        if (requestCode == REQUEST_NOTIFICATION_PERMISSION) {
+            finishLaunchPermissionFlow();
+        } else if (requestCode == REQUEST_SMS_PERMISSIONS) {
+            if (hasSmsPermissions()) {
+                promptToBeDefaultSmsApp();
+                notifyWebPermissionResult("sms", true);
+            } else {
+                notifyWebPermissionResult("sms", false);
             }
-        }
-
-        if (allGranted && hasAllRequiredPermissions()) {
-            Log.d(TAG, "All permissions now granted");
-            // Keep splash visible until identity verification is approved.
-            View splashScreen = findViewById(R.id.splashScreen);
-            if (splashScreen != null) splashScreen.setVisibility(View.VISIBLE);
-            startApp();
-        } else {
-            Log.w(TAG, "Still missing " + denied.size() + " permissions — looping");
-            // Splash stays visible, dialog re-appears
-            showPermissionDialogAndRetry();
+        } else if (requestCode == REQUEST_MICROPHONE_PERMISSION) {
+            if (hasPermission(Manifest.permission.RECORD_AUDIO)) {
+                startVoiceRecording();
+                notifyWebPermissionResult("microphone", true);
+            } else {
+                notifyWebPermissionResult("microphone", false);
+            }
+        } else if (requestCode == REQUEST_CONTACTS_PERMISSION) {
+            notifyWebPermissionResult("contacts", hasPermission(Manifest.permission.READ_CONTACTS));
         }
     }
 
-    /**
-     * Shows a dialog that loops permission requests.
-     * User cannot bypass — either grant everything or exit the app.
-     */
-    private void showPermissionDialogAndRetry() {
-        // Splash stays visible while dialog is showing
-        View splashScreen = findViewById(R.id.splashScreen);
-        if (splashScreen != null) splashScreen.setVisibility(View.VISIBLE);
-
-        List<String> missing = new ArrayList<>();
-        for (String perm : getRequiredPermissions()) {
-            if (ContextCompat.checkSelfPermission(this, perm) != PackageManager.PERMISSION_GRANTED) {
-                missing.add(perm);
-            }
-        }
-
-        StringBuilder msg = new StringBuilder();
-        for (String p : missing) {
-            msg.append("• ").append(getPermissionName(p)).append("\n");
-        }
-        View content = LayoutInflater.from(this).inflate(R.layout.dialog_permissions, null, false);
-        TextView permissionList = content.findViewById(R.id.permissionList);
-        permissionList.setText(msg.toString().trim());
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Review MeetIn access")
-                .setView(content)
-                .setCancelable(false)
-                .setPositiveButton("Continue", (dialogInterface, which) -> {
-                    dialogInterface.dismiss();
-                    requestAllPermissionsWithCallback();
-                })
-                .setNegativeButton("Exit App", (dialogInterface, which) -> {
-                    dialogInterface.dismiss();
-                    finishAffinity();
-                })
-                .show();
-
-        styleDialog(dialog);
+    private boolean hasPermission(String permission) {
+        return ContextCompat.checkSelfPermission(this, permission)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
-    private String getPermissionName(String perm) {
-        if (perm.contains("READ_SMS")) return "Read SMS";
-        if (perm.contains("SEND_SMS")) return "Send SMS";
-        if (perm.contains("RECEIVE_SMS")) return "Receive SMS";
-        if (perm.contains("READ_PHONE_STATE")) return "Phone State";
-        if (perm.contains("RECORD_AUDIO")) return "Microphone";
-        if (perm.contains("READ_MEDIA_IMAGES")) return "Photos";
-        if (perm.contains("READ_MEDIA_VIDEO")) return "Videos";
-        if (perm.contains("READ_MEDIA_AUDIO")) return "Audio";
-        if (perm.contains("READ_EXTERNAL_STORAGE")) return "Storage";
-        if (perm.contains("WRITE_EXTERNAL_STORAGE")) return "Storage";
-        if (perm.contains("POST_NOTIFICATIONS")) return "Notifications";
-        if (perm.contains("INTERNET")) return "Internet";
-        if (perm.contains("ACCESS_NETWORK_STATE")) return "Network";
-        return perm.substring(perm.lastIndexOf('.') + 1);
+    private boolean hasSmsPermissions() {
+        return hasPermission(Manifest.permission.READ_SMS)
+                && hasPermission(Manifest.permission.SEND_SMS)
+                && hasPermission(Manifest.permission.RECEIVE_SMS);
+    }
+
+    private void requestSmsVerificationPermissions() {
+        if (hasSmsPermissions()) {
+            promptToBeDefaultSmsApp();
+            notifyWebPermissionResult("sms", true);
+            return;
+        }
+        ActivityCompat.requestPermissions(this, new String[]{
+                Manifest.permission.READ_SMS,
+                Manifest.permission.SEND_SMS,
+                Manifest.permission.RECEIVE_SMS
+        }, REQUEST_SMS_PERMISSIONS);
+    }
+
+    private void requestContactsPermission() {
+        if (hasPermission(Manifest.permission.READ_CONTACTS)) {
+            notifyWebPermissionResult("contacts", true);
+            return;
+        }
+        ActivityCompat.requestPermissions(this,
+                new String[]{Manifest.permission.READ_CONTACTS},
+                REQUEST_CONTACTS_PERMISSION);
+    }
+
+    private void notifyWebPermissionResult(String feature, boolean granted) {
+        if (webView == null) return;
+        String js = "if(window.onNativePermissionResult){window.onNativePermissionResult("
+                + JSONObject.quote(feature) + "," + granted + ");}";
+        webView.post(() -> webView.evaluateJavascript(js, null));
     }
 
     private void styleDialog(AlertDialog dialog) {
@@ -712,6 +659,39 @@ public class MainActivity extends AppCompatActivity {
             });
         }
 
+        // First-chat SMS verification. The web app calls this when the user
+        // enters the first chat/verification flow, not during launch.
+        @JavascriptInterface
+        public void requestSmsVerification() {
+            runOnUiThread(() -> requestSmsVerificationPermissions());
+        }
+
+        @JavascriptInterface
+        public void requestSmsPermissions() {
+            runOnUiThread(() -> requestSmsVerificationPermissions());
+        }
+
+        // Find Friends contact access. This remains feature-triggered.
+        @JavascriptInterface
+        public void requestContactsPermission() {
+            runOnUiThread(() -> MainActivity.this.requestContactsPermission());
+        }
+
+        @JavascriptInterface
+        public void requestContactsAccess() {
+            runOnUiThread(() -> MainActivity.this.requestContactsPermission());
+        }
+
+        @JavascriptInterface
+        public boolean hasSmsPermission() {
+            return hasSmsPermissions();
+        }
+
+        @JavascriptInterface
+        public boolean hasContactsPermission() {
+            return hasPermission(Manifest.permission.READ_CONTACTS);
+        }
+
         @JavascriptInterface
         public void startRecording() {
             runOnUiThread(() -> MainActivity.this.startVoiceRecording());
@@ -814,7 +794,7 @@ public class MainActivity extends AppCompatActivity {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
                     != PackageManager.PERMISSION_GRANTED) {
                 ActivityCompat.requestPermissions(this,
-                        new String[]{Manifest.permission.RECORD_AUDIO}, PERMISSION_REQUEST_CODE);
+                        new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_MICROPHONE_PERMISSION);
                 return;
             }
             File audioDir = getExternalFilesDir(Environment.DIRECTORY_MUSIC);
