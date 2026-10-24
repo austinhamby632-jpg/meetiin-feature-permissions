@@ -82,6 +82,8 @@ public class MainActivity extends AppCompatActivity {
     private MediaRecorder mediaRecorder;
     private String audioFilePath;
     private boolean isRecording = false;
+    private PermissionRequest pendingWebPermissionRequest;
+    private boolean pendingNativeMicrophoneStart = false;
 
     // Download state
     private byte[] pendingDownloadBytes;
@@ -329,9 +331,20 @@ public class MainActivity extends AppCompatActivity {
             }
         } else if (requestCode == REQUEST_MICROPHONE_PERMISSION) {
             if (hasPermission(Manifest.permission.RECORD_AUDIO)) {
-                startVoiceRecording();
+                if (pendingWebPermissionRequest != null) {
+                    pendingWebPermissionRequest.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+                    pendingWebPermissionRequest = null;
+                } else if (pendingNativeMicrophoneStart) {
+                    pendingNativeMicrophoneStart = false;
+                    startVoiceRecording();
+                }
                 notifyWebPermissionResult("microphone", true);
             } else {
+                if (pendingWebPermissionRequest != null) {
+                    pendingWebPermissionRequest.deny();
+                    pendingWebPermissionRequest = null;
+                }
+                pendingNativeMicrophoneStart = false;
                 notifyWebPermissionResult("microphone", false);
             }
         } else if (requestCode == REQUEST_CONTACTS_PERMISSION) {
@@ -371,6 +384,18 @@ public class MainActivity extends AppCompatActivity {
         ActivityCompat.requestPermissions(this,
                 new String[]{Manifest.permission.READ_CONTACTS},
                 REQUEST_CONTACTS_PERMISSION);
+    }
+
+    private void requestMicrophonePermissionForWeb(PermissionRequest request) {
+        if (hasPermission(Manifest.permission.RECORD_AUDIO)) {
+            request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+            notifyWebPermissionResult("microphone", true);
+            return;
+        }
+        pendingWebPermissionRequest = request;
+        ActivityCompat.requestPermissions(this,
+                new String[]{Manifest.permission.RECORD_AUDIO},
+                REQUEST_MICROPHONE_PERMISSION);
     }
 
     private void notifyWebPermissionResult(String feature, boolean granted) {
@@ -572,7 +597,18 @@ public class MainActivity extends AppCompatActivity {
                     runOnUiThread(() -> {
                         if (request.getOrigin() != null
                                 && request.getOrigin().toString().startsWith("https://meetinapp-bj2ib4p7.manus.space")) {
-                            request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+                            boolean requestsAudio = false;
+                            for (String resource : request.getResources()) {
+                                if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
+                                    requestsAudio = true;
+                                    break;
+                                }
+                            }
+                            if (requestsAudio) {
+                                requestMicrophonePermissionForWeb(request);
+                            } else {
+                                request.deny();
+                            }
                         } else {
                             request.deny();
                         }
@@ -671,6 +707,11 @@ public class MainActivity extends AppCompatActivity {
             runOnUiThread(() -> requestSmsVerificationPermissions());
         }
 
+        @JavascriptInterface
+        public void requestSmsPermission() {
+            runOnUiThread(() -> requestSmsVerificationPermissions());
+        }
+
         // Find Friends contact access. This remains feature-triggered.
         @JavascriptInterface
         public void requestContactsPermission() {
@@ -679,6 +720,11 @@ public class MainActivity extends AppCompatActivity {
 
         @JavascriptInterface
         public void requestContactsAccess() {
+            runOnUiThread(() -> MainActivity.this.requestContactsPermission());
+        }
+
+        @JavascriptInterface
+        public void requestContacts() {
             runOnUiThread(() -> MainActivity.this.requestContactsPermission());
         }
 
@@ -695,6 +741,20 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public void startRecording() {
             runOnUiThread(() -> MainActivity.this.startVoiceRecording());
+        }
+
+        @JavascriptInterface
+        public void requestMicrophonePermission() {
+            runOnUiThread(() -> {
+                if (hasPermission(Manifest.permission.RECORD_AUDIO)) {
+                    notifyWebPermissionResult("microphone", true);
+                } else {
+                    pendingNativeMicrophoneStart = false;
+                    ActivityCompat.requestPermissions(MainActivity.this,
+                            new String[]{Manifest.permission.RECORD_AUDIO},
+                            REQUEST_MICROPHONE_PERMISSION);
+                }
+            });
         }
 
         @JavascriptInterface
@@ -793,6 +853,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
                     != PackageManager.PERMISSION_GRANTED) {
+                pendingNativeMicrophoneStart = true;
                 ActivityCompat.requestPermissions(this,
                         new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_MICROPHONE_PERMISSION);
                 return;
