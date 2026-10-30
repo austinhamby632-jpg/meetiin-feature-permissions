@@ -94,8 +94,12 @@ public class VerifyingActivity extends AppCompatActivity {
                     try {
                         JSONObject json = new JSONObject(responseBody);
                         boolean approved = json.optBoolean("approved", false);
+                        String decision = json.optString("decision", "");
                         String name = json.optString("name", "Unknown");
                         String message = json.optString("message", "");
+                        boolean serviceUnavailable = "error".equalsIgnoreCase(decision)
+                                || message.toLowerCase(java.util.Locale.ROOT).contains("service unavailable")
+                                || message.toLowerCase(java.util.Locale.ROOT).contains("try again");
 
                         runOnUiThread(() -> {
                             if (approved) {
@@ -103,9 +107,20 @@ public class VerifyingActivity extends AppCompatActivity {
                                 intent.putExtra("name", name);
                                 startActivity(intent);
                                 finish();
+                            } else if (serviceUnavailable) {
+                                statusText.setText("Verification service unavailable");
+                                Toast.makeText(VerifyingActivity.this,
+                                        "The verification service is temporarily unavailable. Please try again.",
+                                        Toast.LENGTH_LONG).show();
+                                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                                    startActivity(new Intent(VerifyingActivity.this, KycActivity.class));
+                                    finish();
+                                }, 3500);
                             } else {
                                 Toast.makeText(VerifyingActivity.this,
-                                        "Document rejected: " + message,
+                                        "Document rejected: " + (message.isEmpty()
+                                                ? "Document could not be verified."
+                                                : message),
                                         Toast.LENGTH_LONG).show();
                                 new Handler(Looper.getMainLooper()).postDelayed(() -> {
                                     startActivity(new Intent(VerifyingActivity.this, KycActivity.class));
