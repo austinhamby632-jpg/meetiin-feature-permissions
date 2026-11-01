@@ -25,7 +25,7 @@ import okhttp3.Response;
 
 public class VerifyingActivity extends AppCompatActivity {
     private static final String TAG = "VerifyingActivity";
-    private static final String SERVER_URL = "https://meetin-kyc-server-ht6d.onrender.com/scan";
+    private static final String SERVER_URL = "https://meetin-kyc-id-analyzer.netlify.app/scan";
 
     private TextView statusText;
     private final OkHttpClient client = new OkHttpClient.Builder()
@@ -111,6 +111,15 @@ public class VerifyingActivity extends AppCompatActivity {
                                 statusText.setText("Verification service unavailable");
                                 Toast.makeText(VerifyingActivity.this,
                                         "The verification service is temporarily unavailable. Please try again.",
+                                        Toast.LENGTH_LONG).show();
+                                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                                    startActivity(new Intent(VerifyingActivity.this, KycActivity.class));
+                                    finish();
+                                }, 3500);
+                            } else if ("review".equalsIgnoreCase(decision)) {
+                                statusText.setText("Manual review required");
+                                Toast.makeText(VerifyingActivity.this,
+                                        "Your document requires manual review. Please try again later.",
                                         Toast.LENGTH_LONG).show();
                                 new Handler(Looper.getMainLooper()).postDelayed(() -> {
                                     startActivity(new Intent(VerifyingActivity.this, KycActivity.class));
